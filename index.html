@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pac-Man</title>
+<style>
+body{
+  margin:0;
+  background:black;
+  color:white;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  font-family:Arial, sans-serif;
+}
+canvas{ image-rendering:pixelated; border:6px solid #000; margin-top:10px;}
+button{
+  padding:8px 14px;
+  font-size:18px;
+  background:#ffcc00;
+  border:none;
+  border-radius:6px;
+}
+#controls{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+}
+#controls div{ display:flex; gap:6px; }
+</style>
+</head>
+<body>
+
+<h2>Pac-Man</h2>
+<canvas id="canvas"></canvas>
+
+<div>
+Score: <span id="score">0</span> |
+Vies: <span id="lives">3</span>
+</div>
+
+<div id="controls">
+  <button id="up">▲</button>
+  <div>
+    <button id="left">◄</button>
+    <button id="down">▼</button>
+    <button id="right">►</button>
+  </div>
+</div>
+
+<script>
+// ===== CANVAS =====
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+const TILE=22, COLS=28, ROWS=31;
+canvas.width=COLS*TILE;
+canvas.height=ROWS*TILE;
+
+// ===== HUD =====
+const scoreEl = document.getElementById("score");
+const livesEl = document.getElementById("lives");
+let score = 0;
+let lives = 3;
+
+// ===== MAP =====
+const rawMap=[
+"1111111111111111111111111111",
+"1000000000110000000000000001",
+"1011111110110111111111111101",
+"1030000010000100000100000301",
+"1011101111110111110111011101",
+"1000001000000000000100010001",
+"1110111011110111110111010111",
+"0000100001000100010001000000",
+"1110101110111110111010110111",
+"1000000000100000000000000001",
+"1011110111110111110111111101",
+"1000000100000100000100000001",
+"1111110111110111110111111111",
+"0000000100000100000100000000",
+"1111110111110111110111111111",
+"1000000100000100000100000001",
+"1011110111110111110111111101",
+"1000000000100000000000000001",
+"1110101110111110111010110111",
+"0000100001000100010001000000",
+"1110111011110111110111010111",
+"1000001000000000000100010001",
+"1011101110111011101110111011",
+"1030000100000100000100000301",
+"1011111110110111111111111101",
+"1000000000110000000000000001",
+"1111111111111111111111111111",
+"0000000000000000000000000000",
+"1111111111111111111111111111",
+"1000000000000000000000000001",
+"1111111111111111111111111111"
+];
+let map=[];
+function resetMap(){
+  map=rawMap.map(r=>r.split("").map(c=>c==="1"?1:c==="0"?0:c==="3"?3:2));
+}
+
+// ===== PLAYER =====
+const player={x:13,y:23,dir:{x:0,y:0},next:{x:0,y:0}};
+
+// ===== GHOSTS =====
+const ghosts=[
+ {x:13,y:11,color:"#ff0000"},
+ {x:14,y:11,color:"#ffb8ff"},
+ {x:12,y:11,color:"#00ffff"},
+ {x:15,y:11,color:"#ffb852"}
+];
+
+// ===== POWER =====
+let power=false, powerTimer=0;
+let lastMove=0, SPEED=90;
+let mouth=0, mouthDir=1;
+
+// ===== SONS =====
+const AudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playSound(freq,duration=0.1,type="square"){
+  const osc = AudioCtx.createOscillator();
+  const gain = AudioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  osc.connect(gain);
+  gain.connect(AudioCtx.destination);
+  osc.start();
+  gain.gain.setValueAtTime(0.15, AudioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, AudioCtx.currentTime+duration);
+  osc.stop(AudioCtx.currentTime+duration);
+}
+function soundPellet(){ playSound(800,0.05); }
+function soundPower(){ playSound(300,0.3,"sawtooth"); }
+function soundDeath(){ playSound(120,0.6,"triangle"); }
+
+// ===== DESSIN =====
+function drawMap(){
+  for(let y=0;y<ROWS;y++){
+    for(let x=0;x<COLS;x++){
+      const t=map[y][x];
+      const px=x*TILE, py=y*TILE;
+      if(t===1){
+        ctx.fillStyle="#0033cc";
+        ctx.fillRect(px,py,TILE,TILE);
+      }else{
+        ctx.fillStyle="#000";
+        ctx.fillRect(px,py,TILE,TILE);
+        if(t===0||t===3){
+          ctx.fillStyle=t===3?"#ffd24d":"#ffe680";
+          ctx.beginPath();
+          ctx.arc(px+TILE/2,py+TILE/2,t===3?6:2,0,Math.PI*2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+}
+function drawPlayer(){
+  const cx=player.x*TILE+TILE/2;
+  const cy=player.y*TILE+TILE/2;
+  mouth+=0.08*mouthDir;
+  if(mouth>0.7||mouth<0) mouthDir*=-1;
+  let rot=0;
+  if(player.dir.x===1) rot=0;
+  if(player.dir.x===-1) rot=Math.PI;
+  if(player.dir.y===-1) rot=-Math.PI/2;
+  if(player.dir.y===1) rot=Math.PI/2;
+  ctx.fillStyle="#ffcc00";
+  ctx.beginPath();
+  ctx.moveTo(cx,cy);
+  ctx.arc(cx,cy,TILE/2-2,mouth+rot,Math.PI*2-mouth+rot);
+  ctx.fill();
+}
+function drawGhost(g){
+  ctx.fillStyle=power?"#4444ff":g.color;
+  ctx.beginPath();
+  ctx.arc(g.x*TILE+TILE/2,g.y*TILE+TILE/2,TILE/2-2,0,Math.PI*2);
+  ctx.fill();
+}
+
+// ===== FANTÔMES NE SE SUPERPOSENT PAS =====
+function ghostOnTile(x,y,currentGhost){
+  return ghosts.some(g=>g!==currentGhost && g.x===x && g.y===y);
+}
+
+// ===== IA FANTÔME =====
+function moveGhost(g){
+  const dirs=[
+    {x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1}
+  ];
+  let best=null,bestDist=9999;
+  dirs.forEach(d=>{
+    const nx=g.x+d.x, ny=g.y+d.y;
+    if(map[ny] && map[ny][nx]!==1 && !ghostOnTile(nx,ny,g)){
+      const dist=Math.hypot(player.x-nx,player.y-ny);
+      if(dist<bestDist){bestDist=dist;best=d;}
+    }
+  });
+  if(best){g.x+=best.x; g.y+=best.y;}
+}
+
+// ===== UPDATE =====
+function update(time){
+  if(time-lastMove>SPEED){
+    // PLAYER
+    if(player.next.x||player.next.y){
+      const nx=player.x+player.next.x;
+      const ny=player.y+player.next.y;
+      if(map[ny]&&map[ny][nx]!==1){ player.dir=player.next; player.next={x:0,y:0}; }
+    }
+    const nx=player.x+player.dir.x;
+    const ny=player.y+player.dir.y;
+    if(map[ny]&&map[ny][nx]!==1){ player.x=nx; player.y=ny; }
+
+    // PAC-GOMME
+    const t=map[player.y][player.x];
+    if(t===0){ score+=10; map[player.y][player.x]=2; soundPellet(); }
+    if(t===3){ score+=50; map[player.y][player.x]=2; power=true; powerTimer=7000; soundPower(); }
+
+    // GHOSTS
+    ghosts.forEach(g=>{
+      moveGhost(g);
+      if(g.x===player.x&&g.y===player.y){
+        if(power){ score+=200; g.x=13; g.y=11; }
+        else{
+          lives--; soundDeath();
+          if(lives<=0){ alert("GAME OVER"); restart(); }
+          player.x=13; player.y=23;
+        }
+      }
+    });
+    lastMove=time;
+  }
+
+  if(power){ powerTimer-=16; if(powerTimer<=0) power=false; }
+
+  scoreEl.textContent=score;
+  livesEl.textContent=lives;
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawMap();
+  ghosts.forEach(drawGhost);
+  drawPlayer();
+
+  requestAnimationFrame(update);
+}
+
+// ===== RESTART =====
+function restart(){
+  resetMap();
+  score=0; lives=3;
+  player.x=13; player.y=23; player.dir={x:0,y:0};
+  ghosts.forEach((g,i)=>{g.x=13+i%2; g.y=11;});
+}
+
+// ===== CONTROLES =====
+window.onkeydown=e=>{
+  if(e.key==="ArrowUp") player.next={x:0,y:-1};
+  if(e.key==="ArrowDown") player.next={x:0,y:1};
+  if(e.key==="ArrowLeft") player.next={x:-1,y:0};
+  if(e.key==="ArrowRight") player.next={x:1,y:0};
+};
+let hold=null;
+function startMove(d){ player.next=d; if(!hold) hold=setInterval(()=>player.next=d,50); }
+function stopMove(){ clearInterval(hold); hold=null; }
+up.onmousedown=()=>startMove({x:0,y:-1});
+down.onmousedown=()=>startMove({x:0,y:1});
+left.onmousedown=()=>startMove({x:-1,y:0});
+right.onmousedown=()=>startMove({x:1,y:0});
+["up","down","left","right"].forEach(id=>{
+  document.getElementById(id).onmouseup=stopMove;
+  document.getElementById(id).onmouseleave=stopMove;
+});
+
+// ===== START =====
+resetMap();
+restart();
+requestAnimationFrame(update);
+</script>
+</body>
+</html>
